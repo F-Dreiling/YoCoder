@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.layout.*?>
+
+<BorderPane xmlns="http://javafx.com/javafx" xmlns:fx="http://javafx.com/fxml" fx:controller="dev.dreiling.YoCoder.controller.MainController" styleClass="root-pane">
+
+    <!-- ═══════════════════════════════════════════════════════════════ TITLE BAR -->
+    <top>
+        <VBox>
+            <!-- ══ TOOLBAR ═════════════════════════════════════════════ -->
+            <HBox styleClass="top-bar" alignment="CENTER_LEFT" spacing="12">
+                <Label text="🐾 YoCoder" styleClass="app-title"/>
+                <Separator orientation="VERTICAL"/>
+                <Label text="Backend:" styleClass="label-dim"/>
+                <Label fx:id="backendStatusLabel" text="Connecting..." styleClass="status-label"/>
+                <Region HBox.hgrow="ALWAYS"/>
+                <Label text="Provider:" styleClass="label-dim"/>
+                <ComboBox fx:id="providerCombo" styleClass="model-combo" onAction="#onProviderChanged"/>
+                <Label text="Model:" styleClass="label-dim"/>
+                <ComboBox fx:id="modelCombo" styleClass="model-combo"/>
+                <Button fx:id="settingsBtn" text="⚙ Settings" styleClass="btn-ghost" onAction="#openSettings"/>
+            </HBox>
+        </VBox>
+    </top>
+
+    <!-- ═══════════════════════════════════════════════════════════════ MAIN -->
+    <center>
+        <SplitPane dividerPositions="0.22, 0.58">
+
+            <!-- ══ LEFT: Project + file tree ══════════════════════════════════ -->
+            <VBox styleClass="panel-left" minWidth="200">
+                <VBox styleClass="panel-section" spacing="6">
+                    <Label text="PROJECT ROOT" styleClass="section-header"/>
+                    <HBox spacing="6" alignment="CENTER_LEFT">
+                        <TextField fx:id="projectRootField" promptText="/path/to/project" HBox.hgrow="ALWAYS" styleClass="path-field"/>
+                        <Button text="📂" fx:id="browseBtn" styleClass="btn-icon" onAction="#browseProject"/>
+                    </HBox>
+                    <Button text="Scan Project" fx:id="scanBtn" styleClass="btn-primary" maxWidth="Infinity" onAction="#scanProject"/>
+                </VBox>
+
+                <Separator/>
+
+                <VBox VBox.vgrow="ALWAYS" styleClass="panel-section">
+                    <Label text="FILES" styleClass="section-header"/>
+                    <TextField fx:id="fileFilterField" promptText="Filter files..." styleClass="filter-field" onKeyReleased="#filterFiles"/>
+                    <TreeView fx:id="fileTree" VBox.vgrow="ALWAYS" styleClass="file-tree"/>
+                    <Label fx:id="fileCountLabel" text="" styleClass="label-dim small"/>
+                </VBox>
+
+                <Separator/>
+
+                <!-- Prompt presets -->
+                <VBox styleClass="panel-section" spacing="4">
+                    <Label text="QUICK PROMPTS" styleClass="section-header"/>
+                    <Button text="📖  Improve readability" styleClass="btn-preset" maxWidth="Infinity" onAction="#applyPreset"
+                            userData="Refactor for readability. Improve naming, structure, and clarity. Keep all behavior identical."/>
+                    <Button text="⚡  Optimize performance" styleClass="btn-preset" maxWidth="Infinity" onAction="#applyPreset"
+                            userData="Optimize for performance. Identify and fix bottlenecks without changing the public API."/>
+                    <Button text="🛡  Add error handling" styleClass="btn-preset" maxWidth="Infinity" onAction="#applyPreset"
+                            userData="Add comprehensive error handling and input validation. Use meaningful error messages."/>
+                    <Button text="📝  Add documentation" styleClass="btn-preset" maxWidth="Infinity" onAction="#applyPreset"
+                            userData="Generate complete Javadoc/PHPDoc/JSDoc for all public methods, parameters, return values and exceptions. Keep all existing code identical."/>
+                    <Button text="🧪  Add unit tests" styleClass="btn-preset" maxWidth="Infinity" onAction="#applyPreset"
+                            userData="Generate comprehensive unit tests for this file covering happy path, edge cases, and error scenarios."/>
+                    <Button text="⁉  Explain code" styleClass="btn-preset" maxWidth="Infinity" onAction="#applyPreset"
+                            userData="Only explain the code, don't change/add file content including comments! Comprehensively break down all methods, parameters and return values. Outline their purpose and function in the EXPLANATION section."/>
+                </VBox>
+            </VBox>
+
+            <!-- ══ MIDDLE: Editor (original file) + prompt ════════════════════ -->
+            <VBox styleClass="panel-mid" minWidth="300">
+
+                <HBox styleClass="editor-header" alignment="CENTER_LEFT" spacing="8">
+                    <Label text="ORIGINAL" styleClass="section-header"/>
+                    <Label fx:id="selectedFileLabel" text="(no file selected)" styleClass="label-dim"/>
+                    <Region HBox.hgrow="ALWAYS"/>
+                    <Label fx:id="fileSizeLabel" text="" styleClass="label-dim small"/>
+                </HBox>
+
+                <TextArea fx:id="originalCodeArea" VBox.vgrow="ALWAYS" editable="false" wrapText="false" styleClass="code-area" promptText="Select a file from the tree..."/>
+
+                <Separator/>
+
+                <VBox styleClass="prompt-section" spacing="6">
+                    <HBox alignment="CENTER_LEFT" spacing="8">
+                        <Label text="REFACTORING INSTRUCTION" styleClass="section-header"/>
+                        <Region HBox.hgrow="ALWAYS"/>
+                        <Label fx:id="charCountLabel" text="" styleClass="label-dim small"/>
+                    </HBox>
+                    <TextArea fx:id="promptArea" prefRowCount="4" wrapText="true" styleClass="prompt-area"
+                              promptText="Describe what to refactor. Be specific — 'add DI, improve error handling, keep public API identical'"/>
+                    <HBox spacing="8" alignment="CENTER_RIGHT">
+                        <Label fx:id="contextInfoLabel" text="" styleClass="label-dim small"/>
+                        <Region HBox.hgrow="ALWAYS"/>
+                        <Button text="Clear" styleClass="btn-ghost" onAction="#clearPrompt"/>
+                        <Button fx:id="optimizeBtn" text="⚡  Optimize" styleClass="btn-optimize" onAction="#runOptimize"/>
+                    </HBox>
+                </VBox>
+            </VBox>
+
+            <!-- ══ RIGHT: Refactored output ════════════════════════════════════ -->
+            <VBox styleClass="panel-right" minWidth="300">
+                <HBox styleClass="editor-header" alignment="CENTER_LEFT" spacing="8">
+                    <Label text="REFACTORED OUTPUT" styleClass="section-header"/>
+                    <Region HBox.hgrow="ALWAYS"/>
+                    <ToggleButton fx:id="codeViewBtn" text="Code" styleClass="view-toggle" selected="true" onAction="#showCodeView"/>
+                    <ToggleButton fx:id="explainViewBtn" text="Explain" styleClass="view-toggle" onAction="#showExplainView"/>
+                </HBox>
+
+                <StackPane VBox.vgrow="ALWAYS">
+                    <TextArea fx:id="outputCodeArea" wrapText="false" styleClass="code-area output-area"
+                              promptText="Refactored code will appear here after you click Optimize..."/>
+                    <TextArea fx:id="explanationArea" wrapText="true" styleClass="explanation-area" visible="false" managed="false" editable="false"/>
+
+                    <VBox fx:id="thinkingOverlay" styleClass="thinking-overlay" alignment="CENTER" spacing="12" visible="false" managed="false">
+                        <ProgressIndicator fx:id="progressIndicator" maxWidth="48"/>
+                        <Label fx:id="thinkingLabel" text="Thinking..." styleClass="thinking-label"/>
+                        <Label fx:id="contextFilesLabel" text="" styleClass="label-dim small"/>
+                    </VBox>
+                </StackPane>
+
+                <Separator/>
+
+                <HBox styleClass="action-bar" spacing="8" alignment="CENTER_LEFT">
+                    <VBox spacing="2">
+                        <Label fx:id="contextUsedLabel" text="" styleClass="label-dim small"/>
+                        <Label fx:id="promptCharsLabel" text="" styleClass="label-dim small"/>
+                    </VBox>
+                    <Region HBox.hgrow="ALWAYS"/>
+                    <Button fx:id="copyBtn" text="📋  Copy" styleClass="btn-ghost" onAction="#copyOutput" disable="true"/>
+                    <Button fx:id="saveBtn" text="💾  Save to file" styleClass="btn-primary" onAction="#saveToFile" disable="true"/>
+                </HBox>
+
+                <HBox fx:id="warningBar" styleClass="warning-bar" spacing="8" alignment="CENTER_LEFT" visible="false" managed="false">
+                    <Label text="⚠" styleClass="warning-icon"/>
+                    <Label fx:id="warningLabel" text="" wrapText="true" styleClass="warning-text"/>
+                </HBox>
+            </VBox>
+
+        </SplitPane>
+    </center>
+
+    <!-- ═══════════════════════════════════════════════════════════════ STATUS BAR -->
+    <bottom>
+        <HBox styleClass="status-bar" spacing="12" alignment="CENTER_LEFT">
+            <Label fx:id="statusLabel" text="Ready" styleClass="status-text"/>
+            <Region HBox.hgrow="ALWAYS"/>
+            <Label fx:id="tokenUsageLabel" text="" styleClass="label-dim small"/>
+        </HBox>
+    </bottom>
+
+</BorderPane>
