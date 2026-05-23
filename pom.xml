@@ -60,74 +60,32 @@
 
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
-				<artifactId>maven-dependency-plugin</artifactId>
-				<version>3.6.1</version>
+				<artifactId>maven-shade-plugin</artifactId>
+				<version>3.5.2</version>
 				<executions>
 					<execution>
-						<id>copy-dependencies</id>
 						<phase>package</phase>
-						<goals><goal>copy-dependencies</goal></goals>
+						<goals><goal>shade</goal></goals>
 						<configuration>
-							<outputDirectory>${project.build.directory}/libs</outputDirectory>
-							<includeScope>runtime</includeScope>
+							<createDependencyReducedPom>false</createDependencyReducedPom>
+							<filters>
+								<!-- Prevent shade from breaking the module-info -->
+								<filter>
+									<artifact>*:*</artifact>
+									<excludes>
+										<exclude>module-info.class</exclude>
+										<exclude>META-INF/*.SF</exclude>
+										<exclude>META-INF/*.DSA</exclude>
+										<exclude>META-INF/*.RSA</exclude>
+									</excludes>
+								</filter>
+							</filters>
+							<transformers>
+								<transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+									<mainClass>${main.class}</mainClass>
+								</transformer>
+							</transformers>
 						</configuration>
-					</execution>
-				</executions>
-			</plugin>
-
-			<plugin>
-				<groupId>org.apache.maven.plugins</groupId>
-				<artifactId>maven-jar-plugin</artifactId>
-				<version>3.3.0</version>
-				<configuration>
-					<archive>
-						<manifest>
-							<mainClass>${main.class}</mainClass>
-							<addClasspath>true</addClasspath>
-							<classpathPrefix>libs/</classpathPrefix>
-						</manifest>
-					</archive>
-				</configuration>
-			</plugin>
-
-			<plugin>
-				<groupId>org.panteleyev</groupId>
-				<artifactId>jpackage-maven-plugin</artifactId>
-				<version>1.6.5</version>
-				<configuration>
-					<name>YoCoder</name>
-					<appVersion>${project.version}</appVersion>
-					<vendor>dev.dreiling</vendor>
-					<destination>${jpackage.output}</destination>
-
-					<!-- Input: JAR and dependencies -->
-					<input>${project.build.directory}</input>
-					<mainJar>${project.artifactId}-${project.version}.jar</mainJar>
-					<mainClass>${main.class}</mainClass>
-
-					<!-- JVM args: wire up JavaFX -->
-					<javaOptions>
-						<option>--module-path</option>
-						<option>$APPDIR</option>
-						<option>--add-modules</option>
-						<option>javafx.controls,javafx.fxml</option>
-						<option>--enable-native-access=ALL-UNNAMED</option>
-					</javaOptions>
-
-					<!-- Windows-specific settings -->
-					<type>EXE</type>
-					<winDirChooser>true</winDirChooser>
-					<winShortcut>true</winShortcut>
-					<winMenu>true</winMenu>
-					<winMenuGroup>YoCoder</winMenuGroup>
-
-					<icon>src/main/resources/yocoder.ico</icon>
-				</configuration>
-				<executions>
-					<execution>
-						<id>jpackage</id>
-						<phase>verify</phase>
-						<goals><goal>jpackage</goal></goals>
 					</execution>
 				</executions>
 			</plugin>
