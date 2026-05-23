@@ -66,10 +66,12 @@ public class MainController implements Initializable {
     // ── State ─────────────────────────────────────────────────────────────────
 
     private final BackendClient backend = new BackendClient(API_URL, API_KEY);
+    private final Map<String, String> refactoredFiles = new LinkedHashMap<>(); // path -> content
     private List<String> allProjectFiles = new ArrayList<>();
     private String selectedFilePath = null;
     private String lastRefactoredCode = null;
     private String lastOriginalCode = null;
+    private String currentOutputFile = null;
 
     // ── Buffer ────────────────────────────────────────────────────────────────
 
@@ -337,23 +339,56 @@ public class MainController implements Initializable {
     private void splitExplanationFromOutput() {
         String full = outputCodeArea.getText();
 
-        // Jackson already unescapes \n to real newlines in extractTextDelta,
-        // but if somehow literal \n slipped through, fix it here
+        // Fix literal \n if they slipped through
         if (!full.contains("\n") && full.contains("\\n")) {
             full = full.replace("\\n", "\n").replace("\\t", "\t");
-            outputCodeArea.setText(full);
         }
 
+        // Split on ## EXPLANATION first
         int explIdx = full.indexOf("## EXPLANATION");
-        if (explIdx >= 0) {
-            String code = full.substring(0, explIdx).trim();
-            String expl = full.substring(explIdx + "## EXPLANATION".length()).trim();
-            outputCodeArea.setText(code);
-            explanationArea.setText(expl);
-            lastRefactoredCode = code;
-        } else {
-            explanationArea.setText("(No explanation section found in response)");
+        String filesSection = explIdx >= 0 ? full.substring(0, explIdx).trim() : full.trim();
+        String expl = explIdx >= 0 ? full.substring(explIdx + "## EXPLANATION".length()).trim()
+                : "(No explanation section found in response)";
+
+        // Parse ##FILE: markers
+        refactoredFiles.clear();
+        String[] parts = filesSection.split("(?=##FILE:)");
+        for (String part : parts) {
+            part = part.trim();
+            if (part.startsWith("##FILE:")) {
+                int newline = part.indexOf('\n');
+                if (newline > 0) {
+                    String filePath = part.substring("##FILE:".length(), newline).trim();
+                    String content = part.substring(newline + 1).trim();
+                    refactoredFiles.put(filePath, content);
+                }
+            }
         }
+
+        if (refactoredFiles.isEmpty()) {
+            // Fallback: no ##FILE: markers found — treat whole output as the target file
+            refactoredFiles.put(selectedFilePath, filesSection);
+        }
+
+        // Show the first (or only) file in the code view
+        currentOutputFile = refactoredFiles.keySet().iterator().next();
+        lastRefactoredCode = refactoredFiles.get(currentOutputFile);
+        outputCodeArea.setText(lastRefactoredCode);
+
+        // If multiple files were returned, show a notice in the explanation
+        explanationArea.setText(expl + buildMultiFileNotice());
+    }
+
+    private String buildMultiFileNotice() {
+        if (refactoredFiles.size() <= 1) return "";
+        StringBuilder sb = new StringBuilder("\n\n── MULTIPLE FILES AFFECTED ──\n");
+        sb.append("The following files were refactored. Use Save to write each one:\n\n");
+        int i = 1;
+        for (String path : refactoredFiles.keySet()) {
+            sb.append(i++).append(". ").append(path).append("\n");
+        }
+        sb.append("\nTo save a different file, select it in the file tree first,\nthen click Save — it will use the correct refactored content.");
+        return sb.toString();
     }
 
     // ── View Toggle ───────────────────────────────────────────────────────────
@@ -382,10 +417,33 @@ public class MainController implements Initializable {
 
     @FXML
     private void saveToFile() {
-        String codeToSave = lastRefactoredCode != null
-                ? lastRefactoredCode
-                : outputCodeArea.getText();
+        if (refactoredFiles.isEmpty()) return;
 
+        // If multiple files, save all of them after one confirmation
+        if (refactoredFiles.size() > 1) {
+            Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
+            confirm.setTitle("Save Refactored Files");
+            confirm.setHeaderText("Save " + refactoredFiles.size() + " refactored files?");
+            confirm.setContentText(
+                    "The following files will be overwritten:\n" +
+                            String.join("\n", refactoredFiles.keySet()) +
+                            "\n\nA .bak backup will be created for each.\n\nContinue?"
+            );
+            Optional<ButtonType> result = confirm.showAndWait();
+            if (result.isEmpty() || result.get() != ButtonType.OK) return;
+
+            String root = projectRootField.getText().trim();
+            saveBtn.setDisable(true);
+            setStatus("Saving " + refactoredFiles.size() + " files...");
+
+            // Save all files sequentially
+            List<String> paths = new ArrayList<>(refactoredFiles.keySet());
+            saveNextFile(root, paths, 0);
+            return;
+        }
+
+        // Single file — original behaviour
+        String codeToSave = lastRefactoredCode != null ? lastRefactoredCode : outputCodeArea.getText();
         if (codeToSave == null || codeToSave.isBlank()) return;
 
         Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
@@ -395,7 +453,6 @@ public class MainController implements Initializable {
                 "This will overwrite the original file on disk.\n" +
                         "A .bak backup will be created automatically.\n\nContinue?"
         );
-
         Optional<ButtonType> result = confirm.showAndWait();
         if (result.isEmpty() || result.get() != ButtonType.OK) return;
 
@@ -414,6 +471,25 @@ public class MainController implements Initializable {
                         showError("Save failed — check backend logs.");
                         setStatus("Save failed");
                     }
+                }));
+    }
+
+    private void saveNextFile(String root, List<String> paths, int index) {
+        if (index >= paths.size()) {
+            Platform.runLater(() -> {
+                saveBtn.setDisable(false);
+                setStatus("✓ Saved " + paths.size() + " files successfully.");
+            });
+            return;
+        }
+        String path = paths.get(index);
+        String content = refactoredFiles.get(path);
+        backend.saveFile(root, path, content)
+                .thenAccept(ok -> Platform.runLater(() -> {
+                    if (!ok) {
+                        showError("Failed to save: " + path);
+                    }
+                    saveNextFile(root, paths, index + 1);
                 }));
     }
 
@@ -468,6 +544,8 @@ public class MainController implements Initializable {
         warningBar.setVisible(false);
         warningBar.setManaged(false);
         lastRefactoredCode = null;
+        refactoredFiles.clear();
+        currentOutputFile = null;
     }
 
     private void setStatus(String msg) {

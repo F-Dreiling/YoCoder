@@ -63,7 +63,7 @@
                     <Button text="🧪  Add unit tests" styleClass="btn-preset" maxWidth="Infinity" onAction="#applyPreset"
                             userData="Generate comprehensive unit tests for this file covering happy path, edge cases, and error scenarios."/>
                     <Button text="⁉  Explain code" styleClass="btn-preset" maxWidth="Infinity" onAction="#applyPreset"
-                            userData="Only explain the code, don't change/add file content including comments! Comprehensively break down all methods, parameters and return values. Outline their purpose and function in the EXPLANATION section."/>
+                            userData="Only write an EXPLANATION section, don't change any file content INCLUDING comments! Comprehensively explain all methods, parameters and return values. Outline their purpose and function in the EXPLANATION section."/>
                 </VBox>
             </VBox>
 
