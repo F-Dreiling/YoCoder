@@ -7,7 +7,7 @@
 
 	<groupId>dev.dreiling</groupId>
 	<artifactId>yocoder</artifactId>
-	<version>1.0</version>
+	<version>1.1</version>
 	<name>YoCoder</name>
 	<description>AI-powered code refactoring desktop UI (JavaFX)</description>
 	<packaging>jar</packaging>
