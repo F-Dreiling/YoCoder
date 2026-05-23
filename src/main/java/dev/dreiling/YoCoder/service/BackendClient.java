@@ -3,7 +3,6 @@ package dev.dreiling.YoCoder.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import dev.dreiling.YoCoder.utils.EnvLoader;
 
 import java.net.URI;
 import java.net.URLEncoder;
