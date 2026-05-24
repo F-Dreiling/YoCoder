@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <?import javafx.scene.control.*?>
 <?import javafx.scene.layout.*?>
+<?import javafx.scene.web.WebView?>
 
 <BorderPane xmlns="http://javafx.com/javafx" xmlns:fx="http://javafx.com/fxml" fx:controller="dev.dreiling.YoCoder.controller.MainController" styleClass="root-pane">
 
@@ -108,8 +109,7 @@
                 </HBox>
 
                 <StackPane VBox.vgrow="ALWAYS">
-                    <TextArea fx:id="outputCodeArea" wrapText="false" styleClass="code-area output-area"
-                              promptText="Refactored code will appear here after you click Optimize..."/>
+                    <WebView fx:id="outputWebView"/>
                     <TextArea fx:id="explanationArea" wrapText="true" styleClass="explanation-area" visible="false" managed="false" editable="false"/>
 
                     <VBox fx:id="thinkingOverlay" styleClass="thinking-overlay" alignment="CENTER" spacing="12" visible="false" managed="false">

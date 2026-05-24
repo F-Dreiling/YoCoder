@@ -2,9 +2,11 @@ package dev.dreiling.YoCoder.controller;
 
 import dev.dreiling.YoCoder.service.BackendClient;
 import dev.dreiling.YoCoder.utils.EnvLoader;
+import dev.dreiling.YoCoder.utils.CodeViewer;
 import javafx.application.Platform;
 import javafx.fxml.FXML;
 import javafx.fxml.Initializable;
+import javafx.scene.web.WebView;
 import javafx.scene.control.*;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
@@ -44,7 +46,7 @@ public class MainController implements Initializable {
     @FXML private Button optimizeBtn;
 
     // Right panel
-    @FXML private TextArea outputCodeArea;
+    @FXML private WebView outputWebView;
     @FXML private TextArea explanationArea;
     @FXML private VBox thinkingOverlay;
     @FXML private Label thinkingLabel;
@@ -73,9 +75,10 @@ public class MainController implements Initializable {
     private String lastOriginalCode = null;
     private String currentOutputFile = null;
 
-    // ── Buffer ────────────────────────────────────────────────────────────────
+    // ── Others ────────────────────────────────────────────────────────────────
 
     private final StringBuilder streamBuffer = new StringBuilder();
+    private CodeViewer codeViewer;
 
     // ── Initialise ────────────────────────────────────────────────────────────
 
@@ -105,6 +108,8 @@ public class MainController implements Initializable {
 
         // Check backend health on startup
         checkBackendHealth();
+
+        codeViewer = new CodeViewer(outputWebView);
 
         setStatus("Ready — scan a project to begin");
     }
@@ -284,7 +289,6 @@ public class MainController implements Initializable {
         // Clear output and show thinking overlay
         setThinkingState(true);
         streamBuffer.setLength(0);
-        outputCodeArea.clear();
         lastRefactoredCode = null;
         setStatus("Connecting to " + provider + " (" + model + ")...");
 
@@ -303,9 +307,7 @@ public class MainController implements Initializable {
                         setThinkingState(false);
                     }
                     streamBuffer.append(chunk);
-                    // Live preview
-                    outputCodeArea.setText(streamBuffer.toString());
-                    outputCodeArea.setScrollTop(Double.MAX_VALUE);
+                    codeViewer.setCode(streamBuffer.toString(), true);
                     statusLabel.setText("Streaming... " + streamBuffer.length() + " chars");
                 }),
 
@@ -313,7 +315,7 @@ public class MainController implements Initializable {
                 () -> {
                     if (doneHandled.compareAndSet(false, true)) {
                         Platform.runLater(() -> {
-                            lastRefactoredCode = outputCodeArea.getText();
+                            lastRefactoredCode = streamBuffer.toString();
                             splitExplanationFromOutput();
                             streamBuffer.setLength(0);
                             copyBtn.setDisable(false);
@@ -337,7 +339,7 @@ public class MainController implements Initializable {
     }
 
     private void splitExplanationFromOutput() {
-        String full = outputCodeArea.getText();
+        String full = lastRefactoredCode;
 
         // Fix literal \n if they slipped through
         if (!full.contains("\n") && full.contains("\\n")) {
@@ -373,7 +375,7 @@ public class MainController implements Initializable {
         // Show the first (or only) file in the code view
         currentOutputFile = refactoredFiles.keySet().iterator().next();
         lastRefactoredCode = refactoredFiles.get(currentOutputFile);
-        outputCodeArea.setText(lastRefactoredCode);
+        codeViewer.setCode(lastRefactoredCode, false);
 
         // If multiple files were returned, show a notice in the explanation
         explanationArea.setText(expl + buildMultiFileNotice());
@@ -397,8 +399,8 @@ public class MainController implements Initializable {
     @FXML private void showExplainView() { setOutputView("explain"); }
 
     private void setOutputView(String mode) {
-        outputCodeArea.setVisible("code".equals(mode));
-        outputCodeArea.setManaged("code".equals(mode));
+        outputWebView.setVisible("code".equals(mode));
+        outputWebView.setManaged("code".equals(mode));
         explanationArea.setVisible("explain".equals(mode));
         explanationArea.setManaged("explain".equals(mode));
     }
@@ -419,7 +421,6 @@ public class MainController implements Initializable {
     private void saveToFile() {
         if (refactoredFiles.isEmpty()) return;
 
-        // If multiple files, save all of them after one confirmation
         if (refactoredFiles.size() > 1) {
             Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
             confirm.setTitle("Save Refactored Files");
@@ -439,39 +440,7 @@ public class MainController implements Initializable {
             // Save all files sequentially
             List<String> paths = new ArrayList<>(refactoredFiles.keySet());
             saveNextFile(root, paths, 0);
-            return;
         }
-
-        // Single file — original behaviour
-        String codeToSave = lastRefactoredCode != null ? lastRefactoredCode : outputCodeArea.getText();
-        if (codeToSave == null || codeToSave.isBlank()) return;
-
-        Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
-        confirm.setTitle("Save Refactored File");
-        confirm.setHeaderText("Overwrite " + selectedFilePath + "?");
-        confirm.setContentText(
-                "This will overwrite the original file on disk.\n" +
-                        "A .bak backup will be created automatically.\n\nContinue?"
-        );
-        Optional<ButtonType> result = confirm.showAndWait();
-        if (result.isEmpty() || result.get() != ButtonType.OK) return;
-
-        String root = projectRootField.getText().trim();
-        saveBtn.setDisable(true);
-        setStatus("Saving...");
-
-        backend.saveFile(root, selectedFilePath, codeToSave)
-                .thenAccept(ok -> Platform.runLater(() -> {
-                    saveBtn.setDisable(false);
-                    if (ok) {
-                        setStatus("✓ Saved to " + selectedFilePath + " (backup: " + selectedFilePath + ".bak)");
-                        originalCodeArea.setText(codeToSave);
-                        lastOriginalCode = codeToSave;
-                    } else {
-                        showError("Save failed — check backend logs.");
-                        setStatus("Save failed");
-                    }
-                }));
     }
 
     private void saveNextFile(String root, List<String> paths, int index) {
@@ -525,8 +494,8 @@ public class MainController implements Initializable {
     private void setThinkingState(boolean thinking) {
         thinkingOverlay.setVisible(thinking);
         thinkingOverlay.setManaged(thinking);
-        outputCodeArea.setVisible(!thinking);
-        outputCodeArea.setManaged(!thinking);
+        outputWebView.setVisible(!thinking);
+        outputWebView.setManaged(!thinking);
         explanationArea.setVisible(false);
         explanationArea.setManaged(false);
         optimizeBtn.setDisable(thinking);
@@ -535,7 +504,7 @@ public class MainController implements Initializable {
     }
 
     private void clearOutput() {
-        outputCodeArea.clear();
+        codeViewer.clear();
         explanationArea.clear();
         copyBtn.setDisable(true);
         saveBtn.setDisable(true);

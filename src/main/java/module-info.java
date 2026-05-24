@@ -1,6 +1,7 @@
 module dev.dreiling.YoCoder {
     requires javafx.controls;
     requires javafx.fxml;
+    requires javafx.web;
     requires java.net.http;
     requires com.fasterxml.jackson.databind;
 
