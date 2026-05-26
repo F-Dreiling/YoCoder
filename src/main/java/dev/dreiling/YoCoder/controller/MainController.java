@@ -42,7 +42,6 @@ public class MainController implements Initializable {
     @FXML private TextArea originalCodeArea;
     @FXML private TextArea promptArea;
     @FXML private Label charCountLabel;
-    @FXML private Label contextInfoLabel;
     @FXML private Button optimizeBtn;
 
     // Right panel
@@ -53,9 +52,8 @@ public class MainController implements Initializable {
     @FXML private Label contextFilesLabel;
     @FXML private ProgressIndicator progressIndicator;
     @FXML private Button copyBtn;
+    @FXML private Button formatBtn;
     @FXML private Button saveBtn;
-    @FXML private Label contextUsedLabel;
-    @FXML private Label promptCharsLabel;
     @FXML private HBox warningBar;
     @FXML private Label warningLabel;
     @FXML private ToggleButton codeViewBtn;
@@ -63,7 +61,6 @@ public class MainController implements Initializable {
 
     // Status bar
     @FXML private Label statusLabel;
-    @FXML private Label tokenUsageLabel;
 
     // ── State ─────────────────────────────────────────────────────────────────
 
@@ -307,7 +304,7 @@ public class MainController implements Initializable {
                         setThinkingState(false);
                     }
                     streamBuffer.append(chunk);
-                    codeViewer.setCode(streamBuffer.toString(), true);
+                    codeViewer.streamUpdate(streamBuffer.toString());
                     statusLabel.setText("Streaming... " + streamBuffer.length() + " chars");
                 }),
 
@@ -319,6 +316,7 @@ public class MainController implements Initializable {
                             splitExplanationFromOutput();
                             streamBuffer.setLength(0);
                             copyBtn.setDisable(false);
+                            formatBtn.setDisable(false);
                             saveBtn.setDisable(false);
                             optimizeBtn.setDisable(false);
                             setStatus("Done! Review the refactored code on the right.");
@@ -346,10 +344,19 @@ public class MainController implements Initializable {
             full = full.replace("\\n", "\n").replace("\\t", "\t");
         }
 
-        // Split on ## EXPLANATION first
+        // Normalize the EXPLANATION marker — the model sometimes outputs:
+        //   "## \nEXPLANATION", "##\nEXPLANATION", "## EXPLANATION\n", or with trailing spaces.
+        // Collapse any of these into the canonical "## EXPLANATION".
+        full = full.replaceAll("##\\s*\n\\s*EXPLANATION", "## EXPLANATION");
+
+        // Also handle markdown bold variant the model sometimes uses
+        full = full.replaceAll("##\\s*\\*\\*EXPLANATION\\*\\*", "## EXPLANATION");
+
+        // Split on ## EXPLANATION
         int explIdx = full.indexOf("## EXPLANATION");
         String filesSection = explIdx >= 0 ? full.substring(0, explIdx).trim() : full.trim();
-        String expl = explIdx >= 0 ? full.substring(explIdx + "## EXPLANATION".length()).trim()
+        String expl = explIdx >= 0
+                ? full.substring(explIdx + "## EXPLANATION".length()).trim()
                 : "(No explanation section found in response)";
 
         // Parse ##FILE: markers
@@ -375,7 +382,7 @@ public class MainController implements Initializable {
         // Show the first (or only) file in the code view
         currentOutputFile = refactoredFiles.keySet().iterator().next();
         lastRefactoredCode = refactoredFiles.get(currentOutputFile);
-        codeViewer.setCode(lastRefactoredCode, false);
+        codeViewer.setCode(lastRefactoredCode);
 
         // If multiple files were returned, show a notice in the explanation
         explanationArea.setText(expl + buildMultiFileNotice());
@@ -410,11 +417,25 @@ public class MainController implements Initializable {
     @FXML
     private void copyOutput() {
         if (lastRefactoredCode == null) return;
+
         javafx.scene.input.Clipboard clipboard = javafx.scene.input.Clipboard.getSystemClipboard();
         javafx.scene.input.ClipboardContent content = new javafx.scene.input.ClipboardContent();
         content.putString(lastRefactoredCode);
         clipboard.setContent(content);
         setStatus("Refactored code copied to clipboard ✓");
+    }
+
+    @FXML
+    private void formatOutput() {
+        if (lastRefactoredCode == null || lastRefactoredCode.isBlank()) return;
+
+        String formatted = codeViewer.formatCode(lastRefactoredCode);
+        lastRefactoredCode = formatted;
+
+        if (currentOutputFile != null) {
+            refactoredFiles.put(currentOutputFile, formatted);
+        }
+        setStatus("Code formatted ✓");
     }
 
     @FXML
@@ -507,9 +528,8 @@ public class MainController implements Initializable {
         codeViewer.clear();
         explanationArea.clear();
         copyBtn.setDisable(true);
+        formatBtn.setDisable(true);
         saveBtn.setDisable(true);
-        contextUsedLabel.setText("");
-        promptCharsLabel.setText("");
         warningBar.setVisible(false);
         warningBar.setManaged(false);
         lastRefactoredCode = null;
@@ -527,11 +547,6 @@ public class MainController implements Initializable {
         alert.setHeaderText(null);
         alert.setContentText(msg);
         alert.showAndWait();
-    }
-
-    private String formatExplanation(String raw) {
-        if (raw == null || raw.isBlank()) return "(No explanation provided)";
-        return raw.strip();
     }
 
     private String iconFor(String filename) {

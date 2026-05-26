@@ -91,7 +91,6 @@
                     <TextArea fx:id="promptArea" prefRowCount="4" wrapText="true" styleClass="prompt-area"
                               promptText="Describe what to refactor. Be specific — 'add DI, improve error handling, keep public API identical'"/>
                     <HBox spacing="8" alignment="CENTER_RIGHT">
-                        <Label fx:id="contextInfoLabel" text="" styleClass="label-dim small"/>
                         <Region HBox.hgrow="ALWAYS"/>
                         <Button text="Clear" styleClass="btn-ghost" onAction="#clearPrompt"/>
                         <Button fx:id="optimizeBtn" text="⚡  Optimize" styleClass="btn-optimize" onAction="#runOptimize"/>
@@ -122,12 +121,9 @@
                 <Separator/>
 
                 <HBox styleClass="action-bar" spacing="8" alignment="CENTER_LEFT">
-                    <VBox spacing="2">
-                        <Label fx:id="contextUsedLabel" text="" styleClass="label-dim small"/>
-                        <Label fx:id="promptCharsLabel" text="" styleClass="label-dim small"/>
-                    </VBox>
                     <Region HBox.hgrow="ALWAYS"/>
                     <Button fx:id="copyBtn" text="📋  Copy" styleClass="btn-ghost" onAction="#copyOutput" disable="true"/>
+                    <Button fx:id="formatBtn" text="⇥  Format" styleClass="btn-format"  onAction="#formatOutput" disable="true"/>
                     <Button fx:id="saveBtn" text="💾  Save to file" styleClass="btn-primary" onAction="#saveToFile" disable="true"/>
                 </HBox>
 
@@ -145,7 +141,6 @@
         <HBox styleClass="status-bar" spacing="12" alignment="CENTER_LEFT">
             <Label fx:id="statusLabel" text="Ready" styleClass="status-text"/>
             <Region HBox.hgrow="ALWAYS"/>
-            <Label fx:id="tokenUsageLabel" text="" styleClass="label-dim small"/>
         </HBox>
     </bottom>
 
