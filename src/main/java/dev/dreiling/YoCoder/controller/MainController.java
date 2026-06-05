@@ -2,19 +2,22 @@ package dev.dreiling.YoCoder.controller;
 
 import dev.dreiling.YoCoder.service.BackendClient;
 import dev.dreiling.YoCoder.utils.EnvLoader;
+import dev.dreiling.YoCoder.utils.FileReader;
 import dev.dreiling.YoCoder.utils.OutputRenderer;
+import dev.dreiling.YoCoder.utils.ProjectScanner;
 import javafx.application.Platform;
 import javafx.fxml.FXML;
 import javafx.fxml.Initializable;
 import javafx.scene.web.WebView;
 import javafx.scene.control.*;
-import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 import javafx.stage.DirectoryChooser;
 
 import java.io.File;
+import java.io.IOException;
 import java.net.URL;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
@@ -61,6 +64,7 @@ public class MainController implements Initializable {
     private List<String> allProjectFiles = new ArrayList<>();
     private final Set<String> contextFiles = new LinkedHashSet<>();
     private String selectedFilePath = null;
+    private String selectedFileContent = null; // cached after local read
     private String lastRawOutput = null;
 
     // ── Others ────────────────────────────────────────────────────────────────
@@ -145,20 +149,21 @@ public class MainController implements Initializable {
         contextFiles.clear();
         updateContextLabel();
 
-        backend.scanProject(root).thenAccept(result -> Platform.runLater(() -> {
-            scanBtn.setDisable(false);
-            if (!result.success()) {
-                showError("Scan failed: " + result.error());
-                fileCountLabel.setText("Error");
-                setStatus("Scan failed");
-                return;
-            }
-
-            allProjectFiles = result.files();
-            buildFileTree(allProjectFiles);
-            fileCountLabel.setText(allProjectFiles.size() + " files");
-            setStatus("Project scanned — " + allProjectFiles.size() + " files found");
-        }));
+        // Scan locally on a background thread
+        CompletableFuture.supplyAsync(() -> ProjectScanner.scan(root))
+                .thenAccept(result -> Platform.runLater(() -> {
+                    scanBtn.setDisable(false);
+                    if (result.isSuccess()) {
+                        allProjectFiles = result.files();
+                        buildFileTree(allProjectFiles);
+                        fileCountLabel.setText(allProjectFiles.size() + " files");
+                        setStatus("Project scanned — " + allProjectFiles.size() + " files found");
+                    } else {
+                        showError("Scan failed: " + result.error());
+                        fileCountLabel.setText("Error");
+                        setStatus("Scan failed");
+                    }
+                }));
     }
 
     // ── File Tree ─────────────────────────────────────────────────────────────
@@ -229,11 +234,9 @@ public class MainController implements Initializable {
             if (fullPath == null) return;
 
             if (event.isControlDown()) {
-                // Ctrl+click: toggle context inclusion
                 toggleContextFile(selected, fullPath);
                 event.consume();
             } else {
-                // Plain click: open file as target
                 onFileSelected(fullPath);
             }
         });
@@ -242,20 +245,13 @@ public class MainController implements Initializable {
     private void toggleContextFile(TreeItem<String> item, String fullPath) {
         if (contextFiles.contains(fullPath)) {
             contextFiles.remove(fullPath);
-            // Remove ☑ prefix from display
             String current = item.getValue();
-            if (current.startsWith("☑ ")) {
-                item.setValue(current.substring(2));
-            }
+            if (current.startsWith("☑ ")) item.setValue(current.substring(2));
         } else {
             contextFiles.add(fullPath);
-            // Add ☑ prefix if not already there
             String current = item.getValue();
-            if (!current.startsWith("☑ ")) {
-                item.setValue("☑ " + current);
-            }
+            if (!current.startsWith("☑ ")) item.setValue("☑ " + current);
         }
-        // Refresh cell styles
         fileTree.refresh();
         updateContextLabel();
     }
@@ -273,9 +269,7 @@ public class MainController implements Initializable {
         if (node == null) return;
         if (node.isLeaf()) {
             String val = node.getValue();
-            if (val != null && val.startsWith("☑ ")) {
-                node.setValue(val.substring(2));
-            }
+            if (val != null && val.startsWith("☑ ")) node.setValue(val.substring(2));
         }
         for (TreeItem<String> child : node.getChildren()) {
             clearContextMarkers(child);
@@ -305,11 +299,19 @@ public class MainController implements Initializable {
     private void onFileSelected(String fullRelPath) {
         if (fullRelPath == null) return;
         selectedFilePath = fullRelPath;
+        selectedFileContent = null; // clear cache until read completes
         selectedFileLabel.setText(fullRelPath);
         setStatus("Loading " + fullRelPath + "...");
 
         String root = projectRootField.getText().trim();
-        backend.readFile(root, fullRelPath).thenAccept(content -> Platform.runLater(() -> {
+        CompletableFuture.supplyAsync(() -> {
+            try {
+                return FileReader.read(root, fullRelPath);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }).thenAccept(content -> Platform.runLater(() -> {
+            selectedFileContent = content;
             originalCodeArea.setText(content);
             int lines = content.split("\n").length;
             fileSizeLabel.setText(lines + " lines · " + content.length() + " chars");
@@ -348,37 +350,39 @@ public class MainController implements Initializable {
         String provider = providerCombo.getValue();
         String model    = modelCombo.getValue();
 
-        if (root.isBlank())            { showError("No project root set.");    return; }
-        if (selectedFilePath == null)  { showError("No file selected.");       return; }
-        if (prompt.isBlank())          { showError("Please enter a prompt.");  return; }
+        if (root.isBlank())                  { showError("No project root set.");          return; }
+        if (selectedFilePath == null)        { showError("No file selected.");             return; }
+        if (selectedFileContent == null)     { showError("File is still loading.");        return; }
+        if (prompt.isBlank())                { showError("Please enter a prompt.");        return; }
 
-        // Clear output and show thinking overlay
         clearOutput();
         setThinkingState(true);
         setStatus("Connecting to " + provider + " (" + model + ")...");
 
-        // Build context summary for the overlay label
-        if (!contextFiles.isEmpty()) {
-            contextFilesLabel.setText("Context: " + contextFiles.size() + " file(s) included");
+        // Read context files locally — filter out target to avoid duplication
+        List<String> ctxPaths = contextFiles.stream()
+                .filter(f -> !f.equals(selectedFilePath))
+                .collect(Collectors.toList());
+
+        Map<String, String> ctxContents = FileReader.readAll(root, ctxPaths);
+
+        if (!ctxContents.isEmpty()) {
+            contextFilesLabel.setText("Context: " + ctxContents.size() + " file(s) included");
         } else {
             contextFilesLabel.setText("");
         }
 
-        String providerOverride = provider.toLowerCase();
-
         backend.streamRefactor(
-                root,
                 selectedFilePath,
-                contextFiles.stream().filter(f -> !f.equals(selectedFilePath)).collect(Collectors.toList()),
+                selectedFileContent,
+                ctxContents,
                 prompt,
-                providerOverride,
+                provider.toLowerCase(),
                 model,
 
                 // onChunk
                 chunk -> Platform.runLater(() -> {
-                    if (thinkingOverlay.isVisible()) {
-                        setThinkingState(false);
-                    }
+                    if (thinkingOverlay.isVisible()) setThinkingState(false);
                     streamBuffer.append(chunk);
                     outputRenderer.streamUpdate(streamBuffer.toString());
                     statusLabel.setText("Streaming... " + streamBuffer.length() + " chars");
@@ -426,14 +430,13 @@ public class MainController implements Initializable {
     @FXML
     private void formatOutput() {
         if (lastRawOutput == null || lastRawOutput.isBlank()) return;
-
         String formatted = outputRenderer.formatCodeBlocks(lastRawOutput);
         lastRawOutput = formatted;
         outputRenderer.finalRender(lastRawOutput);
         setStatus("Code blocks formatted ✓");
     }
 
-    // ── Misc Settings ─────────────────────────────────────────────────────────
+    // ── Settings ──────────────────────────────────────────────────────────────
 
     @FXML
     private void openSettings() {
@@ -472,10 +475,10 @@ public class MainController implements Initializable {
 
     private void clearOutput() {
         outputRenderer.clear();
+        streamBuffer.setLength(0);
         copyBtn.setDisable(true);
         formatBtn.setDisable(true);
         lastRawOutput = null;
-        streamBuffer.setLength(0);
     }
 
     private void setStatus(String msg) {
@@ -514,14 +517,13 @@ public class MainController implements Initializable {
         };
     }
 
-    /** Reconstructs the full relative path from a tree item by walking up to root. */
     private String getFullPath(TreeItem<String> item) {
         List<String> parts = new ArrayList<>();
         TreeItem<String> current = item;
-        while (current != null && current.getParent() != null) { // skip root
+        while (current != null && current.getParent() != null) {
             String val = current.getValue()
-                    .replaceFirst("^☑ ", "")      // strip context marker
-                    .replaceFirst("^[^ ]+ ", "");  // strip emoji prefix
+                    .replaceFirst("^☑ ", "")
+                    .replaceFirst("^[^ ]+ ", "");
             parts.add(0, val);
             current = current.getParent();
         }

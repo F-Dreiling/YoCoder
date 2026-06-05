@@ -2,18 +2,14 @@ package dev.dreiling.YoCoder.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.net.URI;
-import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
@@ -46,42 +42,14 @@ public class BackendClient {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    //  Project Scanning
-    // ─────────────────────────────────────────────────────────────────────────
-
-    public CompletableFuture<ScanResult> scanProject(String projectRoot) {
-        ObjectNode body = mapper.createObjectNode();
-        body.put("projectRoot", projectRoot);
-
-        return postAsync("/api/project/scan", body)
-                .thenApply(json -> {
-                    if (!json.path("success").asBoolean()) {
-                        return new ScanResult(false, json.path("errorMessage").asText(), List.of());
-                    }
-                    List<String> files = new ArrayList<>();
-                    json.path("files").forEach(f -> files.add(f.asText()));
-                    return new ScanResult(true, null, files);
-                });
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    //  File Reading
-    // ─────────────────────────────────────────────────────────────────────────
-
-    public CompletableFuture<String> readFile(String projectRoot, String filePath) {
-        String url = "/api/project/file?projectRoot="
-                + encode(projectRoot) + "&filePath=" + encode(filePath);
-        return getAsync(url).thenApply(json -> json.path("content").asText(""));
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
     //  Streaming Refactor
+    //  File contents are read locally and sent in the request body.
     // ─────────────────────────────────────────────────────────────────────────
 
     public CompletableFuture<Void> streamRefactor(
-            String projectRoot,
-            String targetFile,
-            List<String> contextFiles,
+            String targetFilePath,
+            String targetFileContent,
+            Map<String, String> contextFileContents, // path -> content, may be empty
             String prompt,
             String providerOverride,
             String modelOverride,
@@ -90,15 +58,15 @@ public class BackendClient {
             Consumer<String> onError) {
 
         ObjectNode body = mapper.createObjectNode();
-        body.put("projectRoot", projectRoot);
-        body.put("targetFile", targetFile);
+        body.put("targetFilePath", targetFilePath);
+        body.put("targetFileContent", targetFileContent);
         body.put("prompt", prompt);
 
-        ArrayNode contextArray = mapper.createArrayNode();
-        for (String cf : contextFiles) {
-            contextArray.add(cf);
+        if (contextFileContents != null && !contextFileContents.isEmpty()) {
+            ObjectNode ctxNode = mapper.createObjectNode();
+            contextFileContents.forEach(ctxNode::put);
+            body.set("contextFileContents", ctxNode);
         }
-        body.set("contextFiles", contextArray);
 
         if (providerOverride != null) body.put("providerOverride", providerOverride);
         if (modelOverride != null)    body.put("modelOverride", modelOverride);
@@ -111,7 +79,7 @@ public class BackendClient {
         StringBuilder[] pendingChunk = {new StringBuilder()};
 
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(baseUrl + "/api/refactor/stream"))
+                .uri(URI.create(baseUrl + "/api/refactor"))
                 .header("Content-Type", "application/json")
                 .header("Accept", "text/event-stream")
                 .header(API_HEADER, apiKey)
@@ -130,9 +98,7 @@ public class BackendClient {
                                     }
 
                                     public void onNext(String line) {
-                                        if (line.startsWith("event:")) {
-                                            // SSE event type — ignore
-                                        } else if (line.startsWith("data:")) {
+                                        if (line.startsWith("data:")) {
                                             String data = line.substring(5).trim();
                                             if (data.equals("[DONE]")) {
                                                 if (doneHandled.compareAndSet(false, true)) onDone.run();
@@ -167,7 +133,7 @@ public class BackendClient {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    //  HTTP Helpers — every request includes the API key header
+    //  HTTP Helpers
     // ─────────────────────────────────────────────────────────────────────────
 
     private CompletableFuture<JsonNode> getAsync(String path) {
@@ -183,34 +149,4 @@ public class BackendClient {
                     catch (Exception e) { throw new RuntimeException("Parse error", e); }
                 });
     }
-
-    private CompletableFuture<JsonNode> postAsync(String path, Object bodyObj) {
-        String bodyStr;
-        try { bodyStr = mapper.writeValueAsString(bodyObj); }
-        catch (Exception e) { throw new RuntimeException(e); }
-
-        HttpRequest req = HttpRequest.newBuilder()
-                .uri(URI.create(baseUrl + path))
-                .timeout(Duration.ofMinutes(6))
-                .header("Content-Type", "application/json")
-                .header(API_HEADER, apiKey)
-                .POST(HttpRequest.BodyPublishers.ofString(bodyStr))
-                .build();
-
-        return http.sendAsync(req, HttpResponse.BodyHandlers.ofString())
-                .thenApply(r -> {
-                    try { return mapper.readTree(r.body()); }
-                    catch (Exception e) { throw new RuntimeException("Parse error", e); }
-                });
-    }
-
-    private String encode(String s) {
-        return URLEncoder.encode(s, StandardCharsets.UTF_8);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    //  Result types
-    // ─────────────────────────────────────────────────────────────────────────
-
-    public record ScanResult(boolean success, String error, List<String> files) {}
 }

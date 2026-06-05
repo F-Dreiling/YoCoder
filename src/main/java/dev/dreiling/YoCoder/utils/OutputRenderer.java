@@ -224,6 +224,7 @@ public class OutputRenderer {
 
     /**
      * Splits the raw AI output into alternating prose/code segments.
+     * Splits on lines starting with "##FILE:".
      */
     private List<Segment> parse(String raw) {
         List<Segment> segments = new ArrayList<>();
@@ -236,7 +237,6 @@ public class OutputRenderer {
         for (int i = 0; i < lines.length; i++) {
             String line = lines[i];
             if (line.startsWith("##FILE:")) {
-                // Flush whatever we have
                 if (current.length() > 0) {
                     String content = current.toString();
                     if (inCodeBlock) {
@@ -248,6 +248,11 @@ public class OutputRenderer {
                 }
                 currentFilePath = line.substring("##FILE:".length()).trim();
                 inCodeBlock = true;
+            } else if (inCodeBlock && line.equals("##ENDFILE")) {
+                segments.add(new Segment(true, currentFilePath, current.toString()));
+                current.setLength(0);
+                inCodeBlock = false;
+                currentFilePath = null;
             } else {
                 current.append(line);
                 if (i < lines.length - 1) current.append("\n");
