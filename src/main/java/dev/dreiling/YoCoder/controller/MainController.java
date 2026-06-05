@@ -2,7 +2,7 @@ package dev.dreiling.YoCoder.controller;
 
 import dev.dreiling.YoCoder.service.BackendClient;
 import dev.dreiling.YoCoder.utils.EnvLoader;
-import dev.dreiling.YoCoder.utils.CodeViewer;
+import dev.dreiling.YoCoder.utils.OutputRenderer;
 import javafx.application.Platform;
 import javafx.fxml.FXML;
 import javafx.fxml.Initializable;
@@ -35,6 +35,7 @@ public class MainController implements Initializable {
     @FXML private TextField fileFilterField;
     @FXML private TreeView<String> fileTree;
     @FXML private Label fileCountLabel;
+    @FXML private Label contextCountLabel;
 
     // Middle panel
     @FXML private Label selectedFileLabel;
@@ -46,18 +47,10 @@ public class MainController implements Initializable {
 
     // Right panel
     @FXML private WebView outputWebView;
-    @FXML private TextArea explanationArea;
     @FXML private VBox thinkingOverlay;
-    @FXML private Label thinkingLabel;
     @FXML private Label contextFilesLabel;
-    @FXML private ProgressIndicator progressIndicator;
     @FXML private Button copyBtn;
     @FXML private Button formatBtn;
-    @FXML private Button saveBtn;
-    @FXML private HBox warningBar;
-    @FXML private Label warningLabel;
-    @FXML private ToggleButton codeViewBtn;
-    @FXML private ToggleButton explainViewBtn;
 
     // Status bar
     @FXML private Label statusLabel;
@@ -65,17 +58,15 @@ public class MainController implements Initializable {
     // ── State ─────────────────────────────────────────────────────────────────
 
     private final BackendClient backend = new BackendClient(API_URL, API_KEY);
-    private final Map<String, String> refactoredFiles = new LinkedHashMap<>(); // path -> content
     private List<String> allProjectFiles = new ArrayList<>();
+    private final Set<String> contextFiles = new LinkedHashSet<>();
     private String selectedFilePath = null;
-    private String lastRefactoredCode = null;
-    private String lastOriginalCode = null;
-    private String currentOutputFile = null;
+    private String lastRawOutput = null;
 
     // ── Others ────────────────────────────────────────────────────────────────
 
     private final StringBuilder streamBuffer = new StringBuilder();
-    private CodeViewer codeViewer;
+    private OutputRenderer outputRenderer;
 
     // ── Initialise ────────────────────────────────────────────────────────────
 
@@ -85,28 +76,19 @@ public class MainController implements Initializable {
         providerCombo.setValue("Gemini");
         onProviderChanged();
 
-        // Prompt char counter
         promptArea.textProperty().addListener((obs, o, n) ->
                 charCountLabel.setText(n.length() + " chars")
         );
 
-        // File tree selection
         fileTree.getSelectionModel().selectedItemProperty().addListener((obs, oldItem, newItem) -> {
             if (newItem != null && newItem.isLeaf()) {
-                onFileSelected(newItem.getValue(), getFullPath(newItem));
+                onFileSelected(getFullPath(newItem));
             }
         });
 
-        // Populate ToggleGroup
-        ToggleGroup viewModeGroup = new ToggleGroup();
-        codeViewBtn.setToggleGroup(viewModeGroup);
-        explainViewBtn.setToggleGroup(viewModeGroup);
-        codeViewBtn.setSelected(true);
-
-        // Check backend health on startup
         checkBackendHealth();
 
-        codeViewer = new CodeViewer(outputWebView);
+        outputRenderer = new OutputRenderer(outputWebView);
 
         setStatus("Ready — scan a project to begin");
     }
@@ -160,6 +142,8 @@ public class MainController implements Initializable {
         scanBtn.setDisable(true);
         fileTree.setRoot(null);
         fileCountLabel.setText("Scanning...");
+        contextFiles.clear();
+        updateContextLabel();
 
         backend.scanProject(root).thenAccept(result -> Platform.runLater(() -> {
             scanBtn.setDisable(false);
@@ -196,7 +180,7 @@ public class MainController implements Initializable {
                 int finalI = i;
                 TreeItem<String> dirItem = dirMap.computeIfAbsent(dirPath, k -> {
                     TreeItem<String> item = new TreeItem<>("📁 " + parts[finalI]);
-                    item.setExpanded(finalI == 0); // expand top level
+                    item.setExpanded(finalI == 0);
                     return item;
                 });
                 if (!parent.getChildren().contains(dirItem)) {
@@ -207,12 +191,100 @@ public class MainController implements Initializable {
             }
 
             String fileName = parts[parts.length - 1];
-            TreeItem<String> fileItem = new TreeItem<>(iconFor(fileName) + " " + fileName);
+            boolean isContext = contextFiles.contains(file);
+            TreeItem<String> fileItem = new TreeItem<>(
+                    (isContext ? "☑ " : "") + iconFor(fileName) + " " + fileName
+            );
             fileItem.setExpanded(false);
             parent.getChildren().add(fileItem);
         }
 
         fileTree.setRoot(root);
+
+        fileTree.setCellFactory(tv -> new TreeCell<>() {
+            @Override
+            protected void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty || item == null) {
+                    setText(null);
+                    setStyle("");
+                } else {
+                    setText(item);
+                    TreeItem<String> treeItem = getTreeItem();
+                    String fullPath = treeItem != null ? getFullPath(treeItem) : null;
+                    if (fullPath != null && contextFiles.contains(fullPath)) {
+                        setStyle("-fx-text-fill: #a6e3a1;");
+                    } else {
+                        setStyle("");
+                    }
+                }
+            }
+        });
+
+        fileTree.setOnMouseClicked(event -> {
+            TreeItem<String> selected = fileTree.getSelectionModel().getSelectedItem();
+            if (selected == null || !selected.isLeaf()) return;
+
+            String fullPath = getFullPath(selected);
+            if (fullPath == null) return;
+
+            if (event.isControlDown()) {
+                // Ctrl+click: toggle context inclusion
+                toggleContextFile(selected, fullPath);
+                event.consume();
+            } else {
+                // Plain click: open file as target
+                onFileSelected(fullPath);
+            }
+        });
+    }
+
+    private void toggleContextFile(TreeItem<String> item, String fullPath) {
+        if (contextFiles.contains(fullPath)) {
+            contextFiles.remove(fullPath);
+            // Remove ☑ prefix from display
+            String current = item.getValue();
+            if (current.startsWith("☑ ")) {
+                item.setValue(current.substring(2));
+            }
+        } else {
+            contextFiles.add(fullPath);
+            // Add ☑ prefix if not already there
+            String current = item.getValue();
+            if (!current.startsWith("☑ ")) {
+                item.setValue("☑ " + current);
+            }
+        }
+        // Refresh cell styles
+        fileTree.refresh();
+        updateContextLabel();
+    }
+
+    @FXML
+    private void clearContextFiles() {
+        clearContextMarkers(fileTree.getRoot());
+        contextFiles.clear();
+        fileTree.refresh();
+        updateContextLabel();
+        setStatus("Context selection cleared");
+    }
+
+    private void clearContextMarkers(TreeItem<String> node) {
+        if (node == null) return;
+        if (node.isLeaf()) {
+            String val = node.getValue();
+            if (val != null && val.startsWith("☑ ")) {
+                node.setValue(val.substring(2));
+            }
+        }
+        for (TreeItem<String> child : node.getChildren()) {
+            clearContextMarkers(child);
+        }
+    }
+
+    private void updateContextLabel() {
+        int count = contextFiles.size();
+        contextCountLabel.setText(count == 0 ? "None selected" : count + " file(s) as context");
     }
 
     @FXML
@@ -230,7 +302,7 @@ public class MainController implements Initializable {
         }
     }
 
-    private void onFileSelected(String displayName, String fullRelPath) {
+    private void onFileSelected(String fullRelPath) {
         if (fullRelPath == null) return;
         selectedFilePath = fullRelPath;
         selectedFileLabel.setText(fullRelPath);
@@ -239,12 +311,9 @@ public class MainController implements Initializable {
         String root = projectRootField.getText().trim();
         backend.readFile(root, fullRelPath).thenAccept(content -> Platform.runLater(() -> {
             originalCodeArea.setText(content);
-            lastOriginalCode = content;
             int lines = content.split("\n").length;
             fileSizeLabel.setText(lines + " lines · " + content.length() + " chars");
             setStatus("Loaded: " + fullRelPath);
-
-            clearOutput();
         })).exceptionally(e -> {
             Platform.runLater(() -> {
                 originalCodeArea.setText("// Error loading file: " + e.getMessage());
@@ -284,16 +353,23 @@ public class MainController implements Initializable {
         if (prompt.isBlank())          { showError("Please enter a prompt.");  return; }
 
         // Clear output and show thinking overlay
+        clearOutput();
         setThinkingState(true);
-        streamBuffer.setLength(0);
-        lastRefactoredCode = null;
         setStatus("Connecting to " + provider + " (" + model + ")...");
+
+        // Build context summary for the overlay label
+        if (!contextFiles.isEmpty()) {
+            contextFilesLabel.setText("Context: " + contextFiles.size() + " file(s) included");
+        } else {
+            contextFilesLabel.setText("");
+        }
 
         String providerOverride = provider.toLowerCase();
 
         backend.streamRefactor(
                 root,
                 selectedFilePath,
+                contextFiles.stream().filter(f -> !f.equals(selectedFilePath)).collect(Collectors.toList()),
                 prompt,
                 providerOverride,
                 model,
@@ -304,7 +380,7 @@ public class MainController implements Initializable {
                         setThinkingState(false);
                     }
                     streamBuffer.append(chunk);
-                    codeViewer.streamUpdate(streamBuffer.toString());
+                    outputRenderer.streamUpdate(streamBuffer.toString());
                     statusLabel.setText("Streaming... " + streamBuffer.length() + " chars");
                 }),
 
@@ -312,14 +388,13 @@ public class MainController implements Initializable {
                 () -> {
                     if (doneHandled.compareAndSet(false, true)) {
                         Platform.runLater(() -> {
-                            lastRefactoredCode = streamBuffer.toString();
-                            splitExplanationFromOutput();
+                            lastRawOutput = streamBuffer.toString();
+                            outputRenderer.finalRender(lastRawOutput);
                             streamBuffer.setLength(0);
                             copyBtn.setDisable(false);
                             formatBtn.setDisable(false);
-                            saveBtn.setDisable(false);
                             optimizeBtn.setDisable(false);
-                            setStatus("Done! Review the refactored code on the right.");
+                            setStatus("Done! Review the output on the right.");
                         });
                     }
                 },
@@ -336,151 +411,26 @@ public class MainController implements Initializable {
         optimizeBtn.setDisable(true);
     }
 
-    private void splitExplanationFromOutput() {
-        String full = lastRefactoredCode;
-
-        // Fix literal \n if they slipped through
-        if (!full.contains("\n") && full.contains("\\n")) {
-            full = full.replace("\\n", "\n").replace("\\t", "\t");
-        }
-
-        // Normalize the EXPLANATION marker — the model sometimes outputs:
-        //   "## \nEXPLANATION", "##\nEXPLANATION", "## EXPLANATION\n", or with trailing spaces.
-        // Collapse any of these into the canonical "## EXPLANATION".
-        full = full.replaceAll("##\\s*\n\\s*EXPLANATION", "## EXPLANATION");
-
-        // Also handle markdown bold variant the model sometimes uses
-        full = full.replaceAll("##\\s*\\*\\*EXPLANATION\\*\\*", "## EXPLANATION");
-
-        // Split on ## EXPLANATION
-        int explIdx = full.indexOf("## EXPLANATION");
-        String filesSection = explIdx >= 0 ? full.substring(0, explIdx).trim() : full.trim();
-        String expl = explIdx >= 0
-                ? full.substring(explIdx + "## EXPLANATION".length()).trim()
-                : "(No explanation section found in response)";
-
-        // Parse ##FILE: markers
-        refactoredFiles.clear();
-        String[] parts = filesSection.split("(?=##FILE:)");
-        for (String part : parts) {
-            part = part.trim();
-            if (part.startsWith("##FILE:")) {
-                int newline = part.indexOf('\n');
-                if (newline > 0) {
-                    String filePath = part.substring("##FILE:".length(), newline).trim();
-                    String content = part.substring(newline + 1).trim();
-                    refactoredFiles.put(filePath, content);
-                }
-            }
-        }
-
-        if (refactoredFiles.isEmpty()) {
-            // Fallback: no ##FILE: markers found — treat whole output as the target file
-            refactoredFiles.put(selectedFilePath, filesSection);
-        }
-
-        // Show the first (or only) file in the code view
-        currentOutputFile = refactoredFiles.keySet().iterator().next();
-        lastRefactoredCode = refactoredFiles.get(currentOutputFile);
-        codeViewer.setCode(lastRefactoredCode);
-
-        // If multiple files were returned, show a notice in the explanation
-        explanationArea.setText(expl + buildMultiFileNotice());
-    }
-
-    private String buildMultiFileNotice() {
-        if (refactoredFiles.size() <= 1) return "";
-        StringBuilder sb = new StringBuilder("\n\n── MULTIPLE FILES AFFECTED ──\n");
-        sb.append("The following files were refactored. Use Save to write each one:\n\n");
-        int i = 1;
-        for (String path : refactoredFiles.keySet()) {
-            sb.append(i++).append(". ").append(path).append("\n");
-        }
-        sb.append("\nTo save a different file, select it in the file tree first,\nthen click Save — it will use the correct refactored content.");
-        return sb.toString();
-    }
-
-    // ── View Toggle ───────────────────────────────────────────────────────────
-
-    @FXML private void showCodeView() { setOutputView("code"); }
-    @FXML private void showExplainView() { setOutputView("explain"); }
-
-    private void setOutputView(String mode) {
-        outputWebView.setVisible("code".equals(mode));
-        outputWebView.setManaged("code".equals(mode));
-        explanationArea.setVisible("explain".equals(mode));
-        explanationArea.setManaged("explain".equals(mode));
-    }
-
-    // ── Copy / Save ───────────────────────────────────────────────────────────
+    // ── Copy / Format ─────────────────────────────────────────────────────────
 
     @FXML
     private void copyOutput() {
-        if (lastRefactoredCode == null) return;
-
+        if (lastRawOutput == null) return;
         javafx.scene.input.Clipboard clipboard = javafx.scene.input.Clipboard.getSystemClipboard();
         javafx.scene.input.ClipboardContent content = new javafx.scene.input.ClipboardContent();
-        content.putString(lastRefactoredCode);
+        content.putString(lastRawOutput);
         clipboard.setContent(content);
-        setStatus("Refactored code copied to clipboard ✓");
+        setStatus("Output copied to clipboard ✓");
     }
 
     @FXML
     private void formatOutput() {
-        if (lastRefactoredCode == null || lastRefactoredCode.isBlank()) return;
+        if (lastRawOutput == null || lastRawOutput.isBlank()) return;
 
-        String formatted = codeViewer.formatCode(lastRefactoredCode);
-        lastRefactoredCode = formatted;
-
-        if (currentOutputFile != null) {
-            refactoredFiles.put(currentOutputFile, formatted);
-        }
-        setStatus("Code formatted ✓");
-    }
-
-    @FXML
-    private void saveToFile() {
-        if (refactoredFiles.isEmpty()) return;
-
-        if (refactoredFiles.size() > 1) {
-            Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
-            confirm.setTitle("Save Refactored Files");
-            confirm.setHeaderText("Save " + refactoredFiles.size() + " refactored files?");
-            confirm.setContentText(
-                    "The following files will be overwritten:\n" +
-                            String.join("\n", refactoredFiles.keySet()) +
-                            "\n\nA .bak backup will be created for each.\n\nContinue?"
-            );
-            Optional<ButtonType> result = confirm.showAndWait();
-            if (result.isEmpty() || result.get() != ButtonType.OK) return;
-
-            String root = projectRootField.getText().trim();
-            saveBtn.setDisable(true);
-            setStatus("Saving " + refactoredFiles.size() + " files...");
-
-            // Save all files sequentially
-            List<String> paths = new ArrayList<>(refactoredFiles.keySet());
-            saveNextFile(root, paths, 0);
-        }
-    }
-
-    private void saveNextFile(String root, List<String> paths, int index) {
-        if (index >= paths.size()) {
-            Platform.runLater(() -> {
-                saveBtn.setDisable(false);
-                setStatus("✓ Saved " + paths.size() + " files successfully.");
-            });
-            return;
-        }
-        String path = paths.get(index);
-        String content = refactoredFiles.get(path);
-        backend.saveFile(root, path, content)
-                .thenAccept(ok -> Platform.runLater(() -> {
-                    if (!ok) {
-                        showError("Failed to save: " + path);
-                    }
-                    saveNextFile(root, paths, index + 1);
-                }));
+        String formatted = outputRenderer.formatCodeBlocks(lastRawOutput);
+        lastRawOutput = formatted;
+        outputRenderer.finalRender(lastRawOutput);
+        setStatus("Code blocks formatted ✓");
     }
 
     // ── Misc Settings ─────────────────────────────────────────────────────────
@@ -489,14 +439,14 @@ public class MainController implements Initializable {
     private void openSettings() {
         Alert info = new Alert(Alert.AlertType.INFORMATION);
         info.setTitle("Settings");
-        info.setHeaderText("Refactor AI Configuration");
+        info.setHeaderText("YoCoder Configuration");
         info.setContentText(
-                "API Key: Set REFACTORAI_CLAUDE_API_KEY env var\n" +
-                        "or edit backend/src/main/resources/application.yml\n\n" +
+                "API Key: Set API_KEY in your .env file\n" +
                         "Backend URL: " + API_URL + "\n" +
                         "Currently selected model: " + modelCombo.getValue() + "\n\n" +
-                        "To change the model, select from the dropdown in the top bar.\n" +
-                        "(Model change requires backend restart if configured via yml.)"
+                        "Context files: Ctrl+click files in the tree to\n" +
+                        "include them as context for the AI.\n\n" +
+                        "To change the model, select from the dropdown in the top bar."
         );
         info.showAndWait();
     }
@@ -517,24 +467,15 @@ public class MainController implements Initializable {
         thinkingOverlay.setManaged(thinking);
         outputWebView.setVisible(!thinking);
         outputWebView.setManaged(!thinking);
-        explanationArea.setVisible(false);
-        explanationArea.setManaged(false);
         optimizeBtn.setDisable(thinking);
-        warningBar.setVisible(false);
-        warningBar.setManaged(false);
     }
 
     private void clearOutput() {
-        codeViewer.clear();
-        explanationArea.clear();
+        outputRenderer.clear();
         copyBtn.setDisable(true);
         formatBtn.setDisable(true);
-        saveBtn.setDisable(true);
-        warningBar.setVisible(false);
-        warningBar.setManaged(false);
-        lastRefactoredCode = null;
-        refactoredFiles.clear();
-        currentOutputFile = null;
+        lastRawOutput = null;
+        streamBuffer.setLength(0);
     }
 
     private void setStatus(String msg) {
@@ -579,11 +520,11 @@ public class MainController implements Initializable {
         TreeItem<String> current = item;
         while (current != null && current.getParent() != null) { // skip root
             String val = current.getValue()
-                    .replaceFirst("^[^ ]+ ", ""); // strip emoji prefix
+                    .replaceFirst("^☑ ", "")      // strip context marker
+                    .replaceFirst("^[^ ]+ ", "");  // strip emoji prefix
             parts.add(0, val);
             current = current.getParent();
         }
-        // Match back to allProjectFiles for accuracy
         String reconstructed = String.join("/", parts);
         return allProjectFiles.stream()
                 .filter(f -> f.endsWith(reconstructed) || f.equals(reconstructed))

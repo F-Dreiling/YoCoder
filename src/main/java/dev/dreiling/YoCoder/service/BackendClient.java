@@ -2,6 +2,7 @@ package dev.dreiling.YoCoder.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.net.URI;
@@ -78,14 +79,27 @@ public class BackendClient {
     // ─────────────────────────────────────────────────────────────────────────
 
     public CompletableFuture<Void> streamRefactor(
-            String projectRoot, String targetFile, String prompt,
-            String providerOverride, String modelOverride,
-            Consumer<String> onChunk, Runnable onDone, Consumer<String> onError) {
+            String projectRoot,
+            String targetFile,
+            List<String> contextFiles,
+            String prompt,
+            String providerOverride,
+            String modelOverride,
+            Consumer<String> onChunk,
+            Runnable onDone,
+            Consumer<String> onError) {
 
         ObjectNode body = mapper.createObjectNode();
         body.put("projectRoot", projectRoot);
         body.put("targetFile", targetFile);
         body.put("prompt", prompt);
+
+        ArrayNode contextArray = mapper.createArrayNode();
+        for (String cf : contextFiles) {
+            contextArray.add(cf);
+        }
+        body.set("contextFiles", contextArray);
+
         if (providerOverride != null) body.put("providerOverride", providerOverride);
         if (modelOverride != null)    body.put("modelOverride", modelOverride);
 
@@ -117,7 +131,7 @@ public class BackendClient {
 
                                     public void onNext(String line) {
                                         if (line.startsWith("event:")) {
-                                            // SSE event type — ignore, we use data content instead
+                                            // SSE event type — ignore
                                         } else if (line.startsWith("data:")) {
                                             String data = line.substring(5).trim();
                                             if (data.equals("[DONE]")) {
@@ -125,11 +139,9 @@ public class BackendClient {
                                             } else if (data.startsWith("[ERROR]")) {
                                                 onError.accept(data.substring(7).trim());
                                             } else if (!data.isEmpty()) {
-                                                // Spring splits multi-line data into multiple data: lines
                                                 pendingChunk[0].append(data).append("\n");
                                             }
                                         } else if (line.isEmpty()) {
-                                            // Blank line = SSE event boundary
                                             if (pendingChunk[0].length() > 0) {
                                                 onChunk.accept(pendingChunk[0].toString());
                                                 pendingChunk[0].setLength(0);
@@ -142,7 +154,6 @@ public class BackendClient {
                                     }
 
                                     public void onComplete() {
-                                        // Flush any remaining buffered content
                                         if (pendingChunk[0].length() > 0) {
                                             onChunk.accept(pendingChunk[0].toString());
                                             pendingChunk[0].setLength(0);
@@ -153,21 +164,6 @@ public class BackendClient {
                         )
                 ).thenApply(r -> (Void) null)
                 .exceptionally(e -> { onError.accept("Connection error: " + e.getMessage()); return null; });
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    //  Save
-    // ─────────────────────────────────────────────────────────────────────────
-
-    public CompletableFuture<Boolean> saveFile(String projectRoot, String filePath, String content) {
-        ObjectNode body = mapper.createObjectNode();
-        body.put("projectRoot", projectRoot);
-        body.put("filePath", filePath);
-        body.put("content", content);
-
-        return postAsync("/api/refactor/save", body)
-                .thenApply(json -> json.path("success").asBoolean())
-                .exceptionally(e -> false);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
