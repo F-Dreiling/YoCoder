@@ -71,7 +71,7 @@ public class OutputRenderer {
                     align-items: center;
                     gap: 8px;
                 }
-                .file-header::before { content: '📄'; font-size: 12px; }
+                .file-header::before { content: ''; }
                 /* Code block */
                 pre.code-block {
                     background: #11111b;
@@ -181,6 +181,7 @@ public class OutputRenderer {
 
     /**
      * Called once streaming finishes. Parses the full output into prose + ##FILE:
+     * code blocks, highlights code, and renders everything as rich HTML.
      */
     public void finalRender(String rawOutput) {
         if (!pageLoaded) return;
@@ -191,6 +192,7 @@ public class OutputRenderer {
 
     /**
      * Re-formats code blocks only (re-indents stripped code), then re-renders.
+     * Returns the modified raw string so the controller can store it.
      */
     public String formatCodeBlocks(String rawOutput) {
         if (rawOutput == null || rawOutput.isBlank()) return rawOutput;
@@ -200,6 +202,7 @@ public class OutputRenderer {
             if (seg.isCode) {
                 result.append("##FILE: ").append(seg.filePath).append("\n");
                 result.append(reindent(seg.content));
+                result.append("\n##ENDFILE\n");
             } else {
                 result.append(seg.content);
             }
@@ -237,18 +240,15 @@ public class OutputRenderer {
         for (int i = 0; i < lines.length; i++) {
             String line = lines[i];
             if (line.startsWith("##FILE:")) {
-                if (current.length() > 0) {
-                    String content = current.toString();
-                    if (inCodeBlock) {
-                        segments.add(new Segment(true, currentFilePath, content));
-                    } else if (!content.isBlank()) {
-                        segments.add(new Segment(false, null, content));
-                    }
+                // Flush any preceding prose
+                if (current.length() > 0 && !current.toString().isBlank()) {
+                    segments.add(new Segment(false, null, current.toString()));
                     current.setLength(0);
                 }
                 currentFilePath = line.substring("##FILE:".length()).trim();
                 inCodeBlock = true;
             } else if (inCodeBlock && line.equals("##ENDFILE")) {
+                // Explicit close — flush as code segment
                 segments.add(new Segment(true, currentFilePath, current.toString()));
                 current.setLength(0);
                 inCodeBlock = false;
@@ -258,7 +258,7 @@ public class OutputRenderer {
                 if (i < lines.length - 1) current.append("\n");
             }
         }
-        // Flush remainder
+        // Flush remainder (handles models that omit ##ENDFILE)
         if (current.length() > 0) {
             String content = current.toString();
             if (inCodeBlock) {
